@@ -1,0 +1,55 @@
+class NDCGLoss2(tf.keras.losses.Loss):
+    def __init__(self, sigma=1.0, reduction=tf.keras.losses.Reduction.AUTO, name=None):
+        super().__init__(reduction=reduction, name=name)
+        self.sigma = sigma
+
+    def call(self, y_true, y_pred):
+        # Ensure that y_true and y_pred are the same shape and dtype
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+
+        # Compute pairwise differences in scores
+        y_pred_diff = tf.expand_dims(y_pred, 2) - tf.expand_dims(y_pred, 1)
+
+        # Mask for pairs where y_i > y_j
+        mask = tf.greater(tf.expand_dims(y_true, 2), tf.expand_dims(y_true, 1))
+
+        # Sigmoid function applied to score differences
+        sigmoid_scores = tf.sigmoid(self.sigma * y_pred_diff)
+
+        # Rank difference term
+        num_items = tf.shape(y_true)[1]
+        rank_diff = tf.abs(tf.range(num_items)[:, None] - tf.range(num_items)[None, :])
+        rank_diff = tf.cast(rank_diff, tf.float32)
+        epsilon = 1e-10  # A small constant to avoid division by zero
+        log_rank_term = tf.abs(1 / (tf.math.log1p(rank_diff) + epsilon) - 1 / (tf.math.log1p(rank_diff + 1) + epsilon))
+
+        # Expand log_rank_term to match the batch size
+        log_rank_term = tf.expand_dims(log_rank_term, 0)
+        log_rank_term = tf.repeat(log_rank_term, tf.shape(y_true)[0], axis=0)
+
+        # Simplified Hard Assignment Distribution H(pi|s)
+        predicted_order = tf.argsort(y_pred, axis=1, direction='DESCENDING')
+        true_order = tf.argsort(y_true, axis=1, direction='DESCENDING')
+        H_pi_s = tf.cast(tf.equal(predicted_order[:, :, None], true_order[:, None, :]), tf.float32)
+
+        # Compute the inner sum
+        inner_sum = H_pi_s * sigmoid_scores**log_rank_term
+
+        # Apply the mask and compute the loss
+        masked_inner_sum = tf.boolean_mask(inner_sum, mask)
+        loss = -tf.reduce_sum(tf.math.log1p(masked_inner_sum), axis=-1)
+
+        # Check for NaN or Inf in tensors and print if present
+        if tf.reduce_any(tf.math.is_nan(loss)) or tf.reduce_any(tf.math.is_inf(loss)):
+            tf.print("y_true:", y_true)
+            tf.print("y_pred:", y_pred)
+            tf.print("y_pred_diff:", y_pred_diff)
+            tf.print("mask:", mask)
+            tf.print("sigmoid_scores:", sigmoid_scores)
+            tf.print("expanded log_rank_term:", log_rank_term)
+            tf.print("H_pi_s:", H_pi_s)
+            tf.print("inner_sum:", inner_sum)
+            tf.print("Loss value:", loss)
+
+        return loss
